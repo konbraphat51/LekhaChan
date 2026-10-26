@@ -1,2 +1,3 @@
 # LekhaChan
-**UNDER CONSTRUCTION** TODO control agent
+
+เลขา (Lekha; secretary) + ฉัน (Chan; my)
