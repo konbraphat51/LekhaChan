@@ -123,3 +123,10 @@ export default {
 ## Claude Notes
 
 =Claude can freely edit below this line. Use this area to share project knowledge throught different chat sessions. Capture conventions, structure, commands, and gotchas so that agents joining later stay consistent with existing decisions.=
+
+### Server Side (Rust on AWS Lambda)
+
+- Hands-on guide: `Docs/RustLambdaHandsOn.md` (+ `.ja.md`). Its code was verified on Windows 11 with Rust 1.99.1 / cargo-lambda 1.9.2 on 2026-10-30.
+- Rust `.rs` file names must be snake_case (rustc `non_snake_case` lint), which conflicts with the UpperCamelCase file-name rule. Confirm with the user before fixing the convention for real server code.
+- The user authenticates with `aws login`. cargo-lambda 1.9.2 cannot read those sessions; use a profile with `credential_process = aws configure export-credentials --profile default --format process`. App code needs the aws-config feature `credentials-login`.
+- `aws-lc-sys` (pulled in by the AWS SDK) fails to build on Windows when `CARGO_HOME` sits in a long path (260-char limit). Keep the default `%USERPROFILE%\.cargo`.
