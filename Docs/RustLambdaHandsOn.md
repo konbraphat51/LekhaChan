@@ -16,6 +16,7 @@ It is written for people who are writing Rust for the first time. Each step adds
 4. [Step 3: Repository Abstraction](#4-step-3-repository-abstraction)
 5. [Step 4: HTTP Routing](#5-step-4-http-routing)
 6. [Step 5: Persist to DynamoDB](#6-step-5-persist-to-dynamodb)
+   - [Interlude: Rust Coding Conventions (Naming and File Organization)](#interlude-rust-coding-conventions-naming-and-file-organization)
 7. [Step 6: Deploy to AWS](#7-step-6-deploy-to-aws)
 8. [Step 7: Clean Up](#8-step-7-clean-up)
 9. [Troubleshooting](#9-troubleshooting)
@@ -165,6 +166,7 @@ task-api/
 
 > **Note on file names:** Rust file names are module names, and the compiler warns unless they are `snake_case`.
 > This guide therefore follows Rust's convention rather than the repository's UpperCamelCase file-name rule.
+> The [Interlude](#interlude-rust-coding-conventions-naming-and-file-organization) covers Rust's naming and file-organization conventions.
 
 ---
 
@@ -1205,6 +1207,128 @@ Each task is stored as one item: `"title": {"S": "..."}`, `"deadline": {"NULL": 
 
 > **🦀 Rust Point: initialize once, reuse**
 > - Everything before `run(...)` runs once per Lambda instance (cold start). The DynamoDB client is created there and reused by every invocation, which keeps requests fast.
+
+---
+
+## Interlude: Rust Coding Conventions (Naming and File Organization)
+
+The code is now complete, so let's use it as an example to learn how Rust code is conventionally named and split into files.
+These conventions come from the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/naming.html) and [The Rust Programming Language](https://doc.rust-lang.org/book/ch07-00-managing-growing-projects-with-packages-crates-and-modules.html). The compiler, rustfmt, and clippy enforce many of them.
+
+### Naming
+
+| Item | Convention | Example in this guide |
+| --- | --- | --- |
+| Package (`name` in `Cargo.toml`) | kebab-case | `task-api` |
+| Module / file | snake_case | `task_repository.rs`, `mod task_repository;` |
+| Type (struct, enum), trait | UpperCamelCase | `Task`, `ApiError`, `TaskRepository` |
+| Enum variant | UpperCamelCase | `TaskStatus::NotStarted` |
+| Function, method | snake_case | `handle_request`, `change_status` |
+| Variable, field, argument | snake_case | `table_name`, `created_at` |
+| Constant, static | SCREAMING_SNAKE_CASE | `CONTENT_TYPE` |
+| Generic type parameter | short UpperCamelCase, usually one letter | `T`, `R` |
+| Lifetime | short lowercase | `'a`, `'_` |
+
+- **Acronyms are one word:** `ApiError`, `Uuid`, `HttpHandler`, not `APIError` or `UUID`.
+- **The compiler checks case.** Breaking the rules compiles, but with warnings like these (actual output):
+
+  ```text
+  warning: module `TaskRepository` should have a snake case name
+  warning: type `task_repository` should have an upper camel case name
+  warning: function `SaveTask` should have a snake case name
+  warning: constant `maxCount` should have an upper case name
+  ```
+
+- **Fit with this repository's rules:** "class names are postpositive nouns" (`TaskRepository`, `TaskCreationRequest`) and "function names start with a verb" (`change_status`, `find_all`) apply to Rust as they are. Only the *case style* of files and directories differs: Rust uses snake_case.
+
+#### Method Name Patterns
+
+Rust uses naming patterns that tell the reader the cost and ownership of a method without reading its body.
+
+| Pattern | Meaning | Examples |
+| --- | --- | --- |
+| `new` | Constructor | `Task::new`, `DynamoTaskRepository::new` |
+| `Default` | Constructor without arguments (derive it rather than writing a `new()` with no arguments; clippy suggests this) | `InMemoryTaskRepository::default()` |
+| No `get_` prefix | Getters are named after what they return | `status_code()`, not `get_status_code()` |
+| `is_` / `has_` | Returns `bool` | `is_empty()`, `is_some()` |
+| `as_` | Cheap view, borrowed → borrowed | `as_slice()`, `as_ref()` |
+| `to_` | Costly conversion that creates a new value | `to_string()`, `to_item()` |
+| `into_` | Consumes `self` (ownership moves) | `into_paginator()` |
+| `try_` | Fallible version that returns `Result` | `try_from()` |
+
+### File Organization
+
+#### Crate Roots
+
+- `src/main.rs` is the root of a **binary crate** (an executable), and `src/lib.rs` is the root of a **library crate**.
+- A common pattern for growing projects is to keep `main.rs` thin (wiring only, as in this guide) and move everything else into `lib.rs`. This makes integration tests in `tests/` possible and lets several binaries share the code.
+
+#### The Module Tree Is Declared Explicitly
+
+Unlike TypeScript, putting a file in `src/` doesn't make it part of the build. Each module must be declared with `mod` in its parent, and the declaration decides where the file must be:
+
+| Declaration | Location | File |
+| --- | --- | --- |
+| `mod task;` | `src/main.rs` | `src/task.rs` |
+| `pub mod in_memory;` | `src/repository.rs` | `src/repository/in_memory.rs` |
+
+When the flat layout of this guide grows, group related modules into directories. The following layout was checked to compile:
+
+```text
+src/
+├─ main.rs           # mod domain; mod repository;
+├─ domain.rs         # pub mod task;
+├─ domain/
+│  └─ task.rs        # pub struct Task
+├─ repository.rs     # pub mod in_memory; + pub trait TaskRepository
+└─ repository/
+   └─ in_memory.rs   # use super::TaskRepository; use crate::domain::task::Task;
+```
+
+- Use `repository.rs` + `repository/` (the Rust 2018+ style). The older `repository/mod.rs` style still works, but you end up with many editor tabs all named `mod.rs`.
+- Paths: `crate::` starts from the crate root, `super::` refers to the parent module, and `self::` to the current one.
+- When to split: when a module gets a second responsibility, or when several modules clearly belong together.
+
+✏️ **Try it:** move `task_repository.rs`, `in_memory_task_repository.rs`, and `dynamo_task_repository.rs` into a `repository` module following the layout above, then confirm that `cargo test` still passes.
+
+#### Visibility
+
+- Everything is **private by default**. Make items public only as far as needed: `pub` (anyone), `pub(crate)` (within this crate, as in the template), or nothing (this module only).
+- In this guide, only `handle_request` is public in `http_handler.rs`. `route_request` and the per-endpoint functions are private implementation details.
+
+#### `use` Declarations
+
+- Group `use` declarations as std → external crates → `crate::`, separated by blank lines (this guide does this; `cargo fmt` sorts within each group).
+- Import **types** by name (`use aws_sdk_dynamodb::Client;`). Call **functions** through their module (`serde_dynamo::to_item(...)`, `std::env::var(...)`) so that their origin is visible at the call site.
+- Avoid glob imports (`use foo::*;`), except `use super::*;` in test modules.
+
+#### Tests and Documentation
+
+- **Unit tests** go in the same file in `#[cfg(test)] mod tests`. **Integration tests** go in `tests/*.rs` and use only the public API of `lib.rs`.
+- **Doc comments:** `//!` documents the enclosing module (the top of the file), and `///` documents the next item. They're written in Markdown, and `cargo doc --open` renders them as HTML. Doc comments are how this repository's commenting rule (file responsibility at the top, a comment for each public item) is applied in Rust.
+
+#### Multiple Lambda Functions
+
+When LekhaChan needs several Lambda functions (for example, an HTTP API and a scheduled job), use a **Cargo workspace**: one repository, several crates, one shared `Cargo.lock` and `target/`. A possible layout:
+
+```text
+server/
+├─ Cargo.toml            # [workspace] members = ["crates/*"]
+└─ crates/
+   ├─ task-domain/       # library crate: Task, TaskRepository
+   ├─ task-api/          # binary crate: HTTP Lambda
+   └─ task-reminder/     # binary crate: scheduled Lambda
+```
+
+Each binary is built into its own `target/lambda/<name>/` directory, and you deploy them one by one with `cargo lambda deploy --binary-name <package> <function-name>`.
+
+#### Tools That Keep You Consistent
+
+| Command | Purpose |
+| --- | --- |
+| `cargo fmt` | Formats code to the standard style (4-space indent, 100-column lines). |
+| `cargo clippy` | Lints for non-idiomatic code. `cargo clippy -- -W clippy::pedantic` enables stricter checks. |
+| `cargo doc --open` | Renders the doc comments. |
 
 ---
 
