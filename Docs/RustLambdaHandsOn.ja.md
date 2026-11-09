@@ -16,6 +16,7 @@ Rust を初めて書く人向けです。各ステップで少しずつコード
 4. [Step 3: リポジトリの抽象化](#4-step-3-リポジトリの抽象化)
 5. [Step 4: HTTP ルーティング](#5-step-4-http-ルーティング)
 6. [Step 5: DynamoDB に保存する](#6-step-5-dynamodb-に保存する)
+   - [幕間：Rust のコーディング慣習（命名規則とファイル分け）](#幕間rust-のコーディング慣習命名規則とファイル分け)
 7. [Step 6: AWS にデプロイ](#7-step-6-aws-にデプロイ)
 8. [Step 7: 後片付け](#8-step-7-後片付け)
 9. [トラブルシューティング](#9-トラブルシューティング)
@@ -165,6 +166,7 @@ task-api/
 
 > **ファイル名について：** Rust ではファイル名がそのままモジュール名になり、`snake_case` でないとコンパイラが警告を出します。
 > そのため本ガイドでは、リポジトリのファイル名規約（UpperCamelCase）ではなく Rust の慣例に従います。
+> Rust の命名規則とファイル分けの慣習は [幕間](#幕間rust-のコーディング慣習命名規則とファイル分け) でまとめて解説します。
 
 ---
 
@@ -1205,6 +1207,128 @@ aws dynamodb scan --table-name LekhaChanTasks
 
 > **🦀 Rust ポイント：初期化は 1 回、使い回す**
 > - `run(...)` より前の処理は、Lambda インスタンスごとに 1 回（コールドスタート時）だけ実行されます。DynamoDB クライアントをそこで作って全リクエストで使い回すので、リクエストが速くなります。
+
+---
+
+## 幕間：Rust のコーディング慣習（命名規則とファイル分け）
+
+コードが一通り完成したので、それを題材に、Rust のコードの名前の付け方とファイルの分け方の慣習を学びましょう。
+ここでの慣習は [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/naming.html) と [The Rust Programming Language](https://doc.rust-jp.rs/book-ja/ch07-00-managing-growing-projects-with-packages-crates-and-modules.html) に基づいており、その多くはコンパイラ・rustfmt・clippy がチェックしてくれます。
+
+### 命名規則
+
+| 対象 | 規則 | 本ガイドでの例 |
+| --- | --- | --- |
+| パッケージ（`Cargo.toml` の `name`） | kebab-case | `task-api` |
+| モジュール／ファイル | snake_case | `task_repository.rs`、`mod task_repository;` |
+| 型（struct, enum）・トレイト | UpperCamelCase | `Task`、`ApiError`、`TaskRepository` |
+| enum のバリアント | UpperCamelCase | `TaskStatus::NotStarted` |
+| 関数・メソッド | snake_case | `handle_request`、`change_status` |
+| 変数・フィールド・引数 | snake_case | `table_name`、`created_at` |
+| 定数・static | SCREAMING_SNAKE_CASE | `CONTENT_TYPE` |
+| ジェネリック型パラメータ | 短い UpperCamelCase（多くは 1 文字） | `T`、`R` |
+| ライフタイム | 短い小文字 | `'a`、`'_` |
+
+- **略語も 1 つの単語として扱います：** `APIError` や `UUID` ではなく、`ApiError`、`Uuid`、`HttpHandler` と書きます。
+- **大文字・小文字の規則はコンパイラがチェックします。** 守らなくてもコンパイルは通りますが、次のような警告が出ます（実際の出力）：
+
+  ```text
+  warning: module `TaskRepository` should have a snake case name
+  warning: type `task_repository` should have an upper camel case name
+  warning: function `SaveTask` should have a snake case name
+  warning: constant `maxCount` should have an upper case name
+  ```
+
+- **このリポジトリの規約との関係：** 「クラス名は名詞で後置修飾」（`TaskRepository`、`TaskCreationRequest`）と「関数名は動詞で始める」（`change_status`、`find_all`）は、Rust でもそのまま当てはまります。違うのはファイル・ディレクトリ名の *大文字小文字のスタイル* だけで、Rust では snake_case にします。
+
+#### メソッド名のパターン
+
+Rust には、本体を読まなくてもメソッドのコストや所有権の扱いがわかる命名パターンがあります。
+
+| パターン | 意味 | 例 |
+| --- | --- | --- |
+| `new` | コンストラクタ | `Task::new`、`DynamoTaskRepository::new` |
+| `Default` | 引数なしのコンストラクタ（引数なしの `new()` を書く代わりに derive する。clippy もこれを勧める） | `InMemoryTaskRepository::default()` |
+| `get_` を付けない | ゲッターには返すものの名前を付ける | `get_status_code()` ではなく `status_code()` |
+| `is_` / `has_` | `bool` を返す | `is_empty()`、`is_some()` |
+| `as_` | 安価な見方の変更（借用 → 借用） | `as_slice()`、`as_ref()` |
+| `to_` | 新しい値を作るコストのかかる変換 | `to_string()`、`to_item()` |
+| `into_` | `self` を消費する（所有権が移る） | `into_paginator()` |
+| `try_` | 失敗しうる版で、`Result` を返す | `try_from()` |
+
+### ファイル分け
+
+#### クレートのルート
+
+- `src/main.rs` は **バイナリクレート**（実行ファイル）のルート、`src/lib.rs` は **ライブラリクレート** のルートです。
+- プロジェクトが育ってきたら、`main.rs` は（本ガイドのように）組み立てだけにして、残りを `lib.rs` 側に移すのが定番です。こうすると `tests/` に結合テストを書けるようになり、複数のバイナリでコードを共有できます。
+
+#### モジュールツリーは明示的に宣言する
+
+TypeScript と違い、`src/` にファイルを置いただけではビルド対象になりません。各モジュールは親モジュールで `mod` 宣言する必要があり、その宣言の位置でファイルの置き場所が決まります：
+
+| 宣言 | 宣言する場所 | ファイル |
+| --- | --- | --- |
+| `mod task;` | `src/main.rs` | `src/task.rs` |
+| `pub mod in_memory;` | `src/repository.rs` | `src/repository/in_memory.rs` |
+
+本ガイドのフラットな構成が大きくなってきたら、関連するモジュールをディレクトリにまとめます。次の構成はコンパイルが通ることを確認済みです：
+
+```text
+src/
+├─ main.rs           # mod domain; mod repository;
+├─ domain.rs         # pub mod task;
+├─ domain/
+│  └─ task.rs        # pub struct Task
+├─ repository.rs     # pub mod in_memory; + pub trait TaskRepository
+└─ repository/
+   └─ in_memory.rs   # use super::TaskRepository; use crate::domain::task::Task;
+```
+
+- `repository.rs` + `repository/` の形（Rust 2018 以降のスタイル）を使いましょう。古い `repository/mod.rs` の形も動きますが、エディタのタブが `mod.rs` だらけになります。
+- パスの書き方：`crate::` はクレートのルートから、`super::` は親モジュール、`self::` は今のモジュールを指します。
+- 分けどき：モジュールが 2 つ目の責務を持ち始めたとき、または明らかにひとまとまりのモジュール群ができたときです。
+
+✏️ **やってみよう：** 上の構成にならって、`task_repository.rs`・`in_memory_task_repository.rs`・`dynamo_task_repository.rs` を `repository` モジュールにまとめ、`cargo test` が通ることを確認しましょう。
+
+#### 可視性
+
+- すべては **既定で非公開** です。必要な範囲だけ公開します：`pub`（どこからでも）、`pub(crate)`（このクレート内だけ。テンプレートで使われていたもの）、何も付けない（このモジュール内だけ）。
+- 本ガイドの `http_handler.rs` で公開しているのは `handle_request` だけです。`route_request` やエンドポイントごとの関数は、非公開の実装詳細です。
+
+#### `use` の書き方
+
+- `use` は std → 外部クレート → `crate::` の順にグループ分けし、空行で区切ります（本ガイドもそうしています。グループ内の並び替えは `cargo fmt` がやってくれます）。
+- **型** は名前で取り込み（`use aws_sdk_dynamodb::Client;`）、**関数** はモジュール名を付けて呼びます（`serde_dynamo::to_item(...)`、`std::env::var(...)`）。呼び出し箇所で出どころがわかるようにするためです。
+- グロブインポート（`use foo::*;`）は避けます。例外はテストモジュールの `use super::*;` です。
+
+#### テストとドキュメント
+
+- **単体テスト** は同じファイルの `#[cfg(test)] mod tests` に書きます。**結合テスト** は `tests/*.rs` に置き、`lib.rs` の公開 API だけを使います。
+- **ドキュメントコメント：** `//!` はそれを囲むモジュール（ファイル先頭）を、`///` は直後の要素を説明します。Markdown で書け、`cargo doc --open` で HTML として表示できます。このリポジトリのコメント規約（ファイル先頭に責務、公開要素ごとにコメント）は、Rust ではドキュメントコメントで満たします。
+
+#### 複数の Lambda 関数
+
+LekhaChan で Lambda 関数が複数必要になったら（例：HTTP API と定期実行ジョブ）、**Cargo ワークスペース** を使います。1 つのリポジトリに複数のクレートを置き、`Cargo.lock` と `target/` を共有する仕組みです。構成例：
+
+```text
+server/
+├─ Cargo.toml            # [workspace] members = ["crates/*"]
+└─ crates/
+   ├─ task-domain/       # ライブラリクレート：Task, TaskRepository
+   ├─ task-api/          # バイナリクレート：HTTP Lambda
+   └─ task-reminder/     # バイナリクレート：定期実行 Lambda
+```
+
+各バイナリは `target/lambda/<name>/` にそれぞれビルドされ、`cargo lambda deploy --binary-name <パッケージ名> <関数名>` で 1 つずつデプロイします。
+
+#### 一貫性を保つためのツール
+
+| コマンド | 用途 |
+| --- | --- |
+| `cargo fmt` | 標準スタイル（インデント 4 スペース、1 行 100 桁）に整形する |
+| `cargo clippy` | Rust らしくない書き方を指摘する。`cargo clippy -- -W clippy::pedantic` でより厳しくチェックできる |
+| `cargo doc --open` | ドキュメントコメントを HTML で表示する |
 
 ---
 
